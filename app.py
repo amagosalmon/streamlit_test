@@ -1,13 +1,27 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
+import sqlite3
 
-# 仮の備品リスト
+# データベースへの接続
+conn = sqlite3.connect('reservations.db', check_same_thread=False)
+c = conn.cursor()
+
+# テーブルの作成
+c.execute('''
+    CREATE TABLE IF NOT EXISTS reservations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        equipment TEXT NOT NULL,
+        start_date DATE NOT NULL,
+        end_date DATE NOT NULL,
+        remarks TEXT
+    )
+''')
+conn.commit()
+
+# 備品リスト
 equipment_list = ['ノートパソコン', 'プロジェクター', '会議用スピーカー', 'デジタルカメラ']
-
-# 予約データの初期化
-if 'reservations' not in st.session_state:
-    st.session_state['reservations'] = pd.DataFrame(columns=['氏名', '備品', '開始日', '終了日', '備考'])
 
 # アプリのタイトル
 st.title('備品貸し出し予約システム')
@@ -29,20 +43,24 @@ with st.form('reservation_form'):
         elif start_date > end_date:
             st.error('開始日は終了日より前の日付を選択してください。')
         else:
-            # 予約データの追加
-            new_reservation = {
-                '氏名': name,
-                '備品': equipment,
-                '開始日': start_date,
-                '終了日': end_date,
-                '備考': remarks
-            }
-            st.session_state['reservations'] = st.session_state['reservations'].append(new_reservation, ignore_index=True)
+            # 予約データの挿入
+            c.execute('''
+                INSERT INTO reservations (name, equipment, start_date, end_date, remarks)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (name, equipment, start_date.isoformat(), end_date.isoformat(), remarks))
+            conn.commit()
             st.success('予約が完了しました！')
 
 # 予約一覧の表示
 st.header('予約一覧')
-if not st.session_state['reservations'].empty:
-    st.dataframe(st.session_state['reservations'])
+
+# データベースから予約データを取得
+c.execute('SELECT * FROM reservations ORDER BY start_date')
+reservations = c.fetchall()
+
+if reservations:
+    # データフレームに変換
+    df = pd.DataFrame(reservations, columns=['ID', '氏名', '備品', '開始日', '終了日', '備考'])
+    st.dataframe(df)
 else:
     st.write('現在、予約はありません。')
