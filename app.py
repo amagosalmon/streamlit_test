@@ -43,13 +43,30 @@ with st.form('reservation_form'):
         elif start_date > end_date:
             st.error('開始日は終了日より前の日付を選択してください。')
         else:
-            # 予約データの挿入
+            # 重複予約のチェック
             c.execute('''
-                INSERT INTO reservations (name, equipment, start_date, end_date, remarks)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (name, equipment, start_date.isoformat(), end_date.isoformat(), remarks))
-            conn.commit()
-            st.success('予約が完了しました！')
+                SELECT * FROM reservations
+                WHERE equipment = ?
+                AND (
+                    (start_date <= ? AND end_date >= ?)
+                    OR (start_date <= ? AND end_date >= ?)
+                    OR (start_date >= ? AND end_date <= ?)
+                )
+            ''', (equipment, end_date.isoformat(), start_date.isoformat(),
+                  end_date.isoformat(), end_date.isoformat(),
+                  start_date.isoformat(), end_date.isoformat()))
+            conflict = c.fetchall()
+
+            if conflict:
+                st.error('選択した期間には既に同じ備品の予約があります。別の期間を選択してください。')
+            else:
+                # 予約データの挿入
+                c.execute('''
+                    INSERT INTO reservations (name, equipment, start_date, end_date, remarks)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (name, equipment, start_date.isoformat(), end_date.isoformat(), remarks))
+                conn.commit()
+                st.success('予約が完了しました！')
 
 # 予約一覧の表示
 st.header('予約一覧')
