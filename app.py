@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date, datetime, time, timedelta
 import sqlite3
+import plotly.express as px  # 追加
 
 # データベースへの接続
 conn = sqlite3.connect('reservations.db', check_same_thread=False)
@@ -46,74 +47,122 @@ equipment_list = [
 # アプリのタイトル
 st.title('備品貸し出し予約システム')
 
-# 予約フォームの作成
-with st.form('reservation_form'):
+# サイドバーで表示内容を選択
+st.sidebar.title("メニュー")
+page = st.sidebar.radio("表示を選択してください", ["新規予約", "予約一覧", "予約カレンダー"])
+
+if page == "新規予約":
+    # 予約フォームの作成
     st.header('新規予約')
-    name = st.text_input('氏名を入力してください')
-    equipment = st.multiselect('備品を選択してください（複数選択可）', equipment_list)
+    with st.form('reservation_form'):
+        name = st.text_input('氏名を入力してください')
+        equipment = st.multiselect('備品を選択してください（複数選択可）', equipment_list)
 
-    # 日付と時間の入力
-    start_date = st.date_input('開始日を選択してください', date.today())
-    start_time = st.time_input('開始時間を選択してください', time(hour=9))
-    end_date = st.date_input('終了日を選択してください', date.today())
-    end_time = st.time_input('終了時間を選択してください', time(hour=10))
+        # 日付と時間の入力
+        start_date = st.date_input('開始日を選択してください', date.today())
+        start_time = st.time_input('開始時間を選択してください', time(hour=9))
+        end_date = st.date_input('終了日を選択してください', date.today())
+        end_time = st.time_input('終了時間を選択してください', time(hour=10))
 
-    remarks = st.text_area('備考があればご記入ください')
-    submit = st.form_submit_button('予約する')
+        remarks = st.text_area('備考があればご記入ください')
+        submit = st.form_submit_button('予約する')
 
-    if submit:
-        # 日時の組み合わせ
-        start_datetime = datetime.combine(start_date, start_time)
-        end_datetime = datetime.combine(end_date, end_time)
+        if submit:
+            # 日時の組み合わせ
+            start_datetime = datetime.combine(start_date, start_time)
+            end_datetime = datetime.combine(end_date, end_time)
 
-        # 入力チェック
-        if not name:
-            st.error('氏名を入力してください。')
-        elif not equipment:
-            st.error('最低でも1つの備品を選択してください。')
-        elif start_datetime >= end_datetime:
-            st.error('開始日時は終了日時より前にしてください。')
-        else:
-            # 各備品について重複予約をチェック
-            conflicts = []
-            for item in equipment:
-                c.execute('''
-                    SELECT * FROM reservations
-                    WHERE equipment = ?
-                    AND (
-                        (start_datetime < ? AND end_datetime > ?)
-                    )
-                ''', (item, end_datetime.isoformat(), start_datetime.isoformat()))
-                conflict = c.fetchall()
-                if conflict:
-                    conflicts.append(item)
-
-            if conflicts:
-                st.error(f'以下の備品は選択した期間に既に予約されています：{", ".join(conflicts)}')
-                st.info('別の期間を選択するか、これらの備品を外して再度お試しください。')
+            # 入力チェック
+            if not name:
+                st.error('氏名を入力してください。')
+            elif not equipment:
+                st.error('最低でも1つの備品を選択してください。')
+            elif start_datetime >= end_datetime:
+                st.error('開始日時は終了日時より前にしてください。')
             else:
-                # 予約データの挿入（各備品ごと）
+                # 各備品について重複予約をチェック
+                conflicts = []
                 for item in equipment:
                     c.execute('''
-                        INSERT INTO reservations (name, equipment, start_datetime, end_datetime, remarks)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (name, item, start_datetime.isoformat(), end_datetime.isoformat(), remarks))
-                conn.commit()
-                st.success('予約が完了しました！')
+                        SELECT * FROM reservations
+                        WHERE equipment = ?
+                        AND (
+                            (start_datetime < ? AND end_datetime > ?)
+                        )
+                    ''', (item, end_datetime.isoformat(), start_datetime.isoformat()))
+                    conflict = c.fetchall()
+                    if conflict:
+                        conflicts.append(item)
 
-# 予約一覧の表示
-st.header('予約一覧')
+                if conflicts:
+                    st.error(f'以下の備品は選択した期間に既に予約されています：{", ".join(conflicts)}')
+                    st.info('別の期間を選択するか、これらの備品を外して再度お試しください。')
+                else:
+                    # 予約データの挿入（各備品ごと）
+                    for item in equipment:
+                        c.execute('''
+                            INSERT INTO reservations (name, equipment, start_datetime, end_datetime, remarks)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (name, item, start_datetime.isoformat(), end_datetime.isoformat(), remarks))
+                    conn.commit()
+                    st.success('予約が完了しました！')
 
-# データベースから予約データを取得
-c.execute('SELECT * FROM reservations ORDER BY start_datetime')
-reservations = c.fetchall()
+elif page == "予約一覧":
+    # 予約一覧の表示
+    st.header('予約一覧')
 
-if reservations:
-    # データフレームに変換
-    df = pd.DataFrame(reservations, columns=['ID', '氏名', '備品', '開始日時', '終了日時', '備考'])
-    # 日時のフォーマットを整える
-    df['開始日時'] = pd.to_datetime(df['開始日時']).dt.strftime('%Y-%m-%d %H:%M')
-    df['終了日時'] = pd.to_datetime(df['終了日時']).dt.strftime('%Y-%m-%d %H:%M')
-    st.dataframe(df)
-else:
-    st.write('現在、予約はありません。')
+    # データベースから予約データを取得
+    c.execute('SELECT * FROM reservations ORDER BY start_datetime')
+    reservations = c.fetchall()
+
+    if reservations:
+        # データフレームに変換
+        df = pd.DataFrame(reservations, columns=['ID', '氏名', '備品', '開始日時', '終了日時', '備考'])
+        # 日時のフォーマットを整える
+        df['開始日時'] = pd.to_datetime(df['開始日時'])
+        df['終了日時'] = pd.to_datetime(df['終了日時'])
+        df['開始'] = df['開始日時'].dt.strftime('%Y-%m-%d %H:%M')
+        df['終了'] = df['終了日時'].dt.strftime('%Y-%m-%d %H:%M')
+        st.dataframe(df[['ID', '氏名', '備品', '開始', '終了', '備考']])
+    else:
+        st.write('現在、予約はありません。')
+
+elif page == "予約カレンダー":
+    # 予約カレンダーの表示
+    st.header('予約カレンダー')
+
+    # データベースから予約データを取得
+    c.execute('SELECT * FROM reservations')
+    reservations = c.fetchall()
+
+    if reservations:
+        # データフレームに変換
+        df = pd.DataFrame(reservations, columns=['ID', '氏名', '備品', '開始日時', '終了日時', '備考'])
+        # 日時のフォーマットを調整
+        df['開始日時'] = pd.to_datetime(df['開始日時'])
+        df['終了日時'] = pd.to_datetime(df['終了日時'])
+
+        # Ganttチャートでカレンダー表示を作成
+        fig = px.timeline(
+            df,
+            x_start="開始日時",
+            x_end="終了日時",
+            y="備品",
+            color="氏名",
+            hover_data=['備考'],
+            title="予約カレンダー"
+        )
+        fig.update_yaxes(autorange="reversed")  # Y軸を反転（上から下に時系列順）
+
+        # 表示期間を指定（現在から1ヶ月先まで）
+        fig.update_xaxes(
+            range=[
+                pd.Timestamp(date.today()),
+                pd.Timestamp(date.today() + timedelta(days=30))
+            ]
+        )
+
+        # グラフを表示
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.write('現在、予約はありません。')
