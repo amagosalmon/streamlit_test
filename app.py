@@ -8,7 +8,7 @@ import plotly.express as px
 conn = sqlite3.connect('reservations.db', check_same_thread=False)
 c = conn.cursor()
 
-# テーブルの作成
+# テーブルの作成（テーブルスキーマの変更に注意）
 c.execute('''
     CREATE TABLE IF NOT EXISTS reservations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,30 +84,32 @@ if page == "新規予約":
             elif start_datetime >= end_datetime:
                 st.error('開始日時は終了日時より前にしてください。')
             else:
-                # 各備品について重複予約をチェック
+                # 重複予約のチェック
                 conflicts = []
+                # 既存の予約を取得
+                c.execute('SELECT equipment, start_datetime, end_datetime FROM reservations')
+                existing_reservations = c.fetchall()
+
                 for item in equipment:
-                    c.execute('''
-                        SELECT * FROM reservations
-                        WHERE equipment = ?
-                        AND (
-                            (start_datetime < ? AND end_datetime > ?)
-                        )
-                    ''', (item, end_datetime.isoformat(), start_datetime.isoformat()))
-                    conflict = c.fetchall()
-                    if conflict:
-                        conflicts.append(item)
+                    for existing_equipment_str, existing_start_str, existing_end_str in existing_reservations:
+                        existing_equipment = existing_equipment_str.split(', ')
+                        if item in existing_equipment:
+                            existing_start = datetime.fromisoformat(existing_start_str)
+                            existing_end = datetime.fromisoformat(existing_end_str)
+                            if not (end_datetime <= existing_start or start_datetime >= existing_end):
+                                conflicts.append(item)
+                                break  # 一度見つかったら次のアイテムへ
 
                 if conflicts:
                     st.error(f'以下の備品は選択した期間に既に予約されています：{", ".join(conflicts)}')
                     st.info('別の期間を選択するか、これらの備品を外して再度お試しください。')
                 else:
-                    # 予約データの挿入（各備品ごと）
-                    for item in equipment:
-                        c.execute('''
-                            INSERT INTO reservations (department, name, equipment, start_datetime, end_datetime, remarks)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        ''', (department, name, item, start_datetime.isoformat(), end_datetime.isoformat(), remarks))
+                    # 予約データの挿入（1レコードにまとめる）
+                    equipment_str = ', '.join(equipment)
+                    c.execute('''
+                        INSERT INTO reservations (department, name, equipment, start_datetime, end_datetime, remarks)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (department, name, equipment_str, start_datetime.isoformat(), end_datetime.isoformat(), remarks))
                     conn.commit()
                     st.success('予約が完了しました！')
 
@@ -142,7 +144,7 @@ elif page == "予約一覧":
                 with st.form('edit_form'):
                     department = st.text_input('部署を入力してください', reservation['部署'].values[0])
                     name = st.text_input('氏名を入力してください', reservation['氏名'].values[0])
-                    equipment = st.multiselect('備品を選択してください（複数選択可）', equipment_list, [reservation['備品'].values[0]])
+                    equipment = st.multiselect('備品を選択してください（複数選択可）', equipment_list, reservation['備品'].values[0].split(', '))
 
                     # 日付と時間の入力
                     start_datetime = reservation['開始日時'].values[0]
@@ -173,29 +175,31 @@ elif page == "予約一覧":
                         else:
                             # 重複予約のチェック
                             conflicts = []
+                            # 自分以外の予約を取得
+                            c.execute('SELECT equipment, start_datetime, end_datetime FROM reservations WHERE id != ?', (selected_id,))
+                            existing_reservations = c.fetchall()
+
                             for item in equipment:
-                                c.execute('''
-                                    SELECT * FROM reservations
-                                    WHERE equipment = ?
-                                    AND id != ?
-                                    AND (
-                                        (start_datetime < ? AND end_datetime > ?)
-                                    )
-                                ''', (item, selected_id, new_end_datetime.isoformat(), new_start_datetime.isoformat()))
-                                conflict = c.fetchall()
-                                if conflict:
-                                    conflicts.append(item)
+                                for existing_equipment_str, existing_start_str, existing_end_str in existing_reservations:
+                                    existing_equipment = existing_equipment_str.split(', ')
+                                    if item in existing_equipment:
+                                        existing_start = datetime.fromisoformat(existing_start_str)
+                                        existing_end = datetime.fromisoformat(existing_end_str)
+                                        if not (new_end_datetime <= existing_start or new_start_datetime >= existing_end):
+                                            conflicts.append(item)
+                                            break  # 一度見つかったら次のアイテムへ
 
                             if conflicts:
                                 st.error(f'以下の備品は選択した期間に既に予約されています：{", ".join(conflicts)}')
                                 st.info('別の期間を選択するか、これらの備品を外して再度お試しください。')
                             else:
                                 # 予約の更新
+                                equipment_str = ', '.join(equipment)
                                 c.execute('''
                                     UPDATE reservations
                                     SET department = ?, name = ?, equipment = ?, start_datetime = ?, end_datetime = ?, remarks = ?
                                     WHERE id = ?
-                                ''', (department, name, ', '.join(equipment), new_start_datetime.isoformat(), new_end_datetime.isoformat(), remarks, selected_id))
+                                ''', (department, name, equipment_str, new_start_datetime.isoformat(), new_end_datetime.isoformat(), remarks, selected_id))
                                 conn.commit()
                                 st.success('予約が更新されました！')
             else:
@@ -224,6 +228,9 @@ elif page == "予約カレンダー":
     # 予約カレンダーの表示
     st.header('予約カレンダー')
 
+    # 日付選択機能を追加
+    selected_date = st.date_input('表示したい日付を選択してください', date.today())
+
     # データベースから予約データを取得
     c.execute('SELECT * FROM reservations')
     reservations = c.fetchall()
@@ -235,34 +242,45 @@ elif page == "予約カレンダー":
         df['開始日時'] = pd.to_datetime(df['開始日時'])
         df['終了日時'] = pd.to_datetime(df['終了日時'])
 
-        # 当日の予約のみを表示
-        today = pd.Timestamp(date.today())
-        df = df[(df['開始日時'] >= today) & (df['開始日時'] < today + timedelta(days=1))]
+        # 選択した日の予約のみを表示
+        selected_day = pd.Timestamp(selected_date)
+        next_day = selected_day + timedelta(days=1)
+        df = df[(df['開始日時'] < next_day) & (df['終了日時'] > selected_day)]
 
         if df.empty:
-            st.write('本日の予約はありません。')
+            st.write(f'{selected_date}の予約はありません。')
         else:
+            # 各予約を備品ごとに分解
+            expanded_rows = []
+            for idx, row in df.iterrows():
+                equipment_items = row['備品'].split(', ')
+                for item in equipment_items:
+                    new_row = row.copy()
+                    new_row['備品'] = item
+                    expanded_rows.append(new_row)
+
+            expanded_df = pd.DataFrame(expanded_rows)
             # 各予約にユニークな色を割り当てる
-            df['予約番号'] = df['ID'].astype(str)
+            expanded_df['予約番号'] = expanded_df['ID'].astype(str)
 
             # ガントチャートでカレンダー表示を作成
             fig = px.timeline(
-                df,
+                expanded_df,
                 x_start="開始日時",
                 x_end="終了日時",
                 y="備品",
                 color="予約番号",
                 hover_data=['部署', '氏名', '備考'],
-                title="予約カレンダー（本日）",
+                title=f"予約カレンダー（{selected_date}）",
                 color_discrete_sequence=px.colors.qualitative.Plotly
             )
             fig.update_yaxes(autorange="reversed")  # Y軸を反転（上から下に時系列順）
 
-            # 表示期間を当日のみに設定
+            # 表示期間を選択した日のみに設定
             fig.update_xaxes(
                 range=[
-                    today,
-                    today + timedelta(days=1)
+                    selected_day,
+                    next_day
                 ],
                 tickformat="%H:%M"
             )
