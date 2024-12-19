@@ -147,8 +147,9 @@ elif page == "予約一覧":
                     equipment = st.multiselect('備品を選択してください（複数選択可）', equipment_list, reservation['備品'].values[0].split(', '))
 
                     # 日付と時間の入力
-                    start_datetime = reservation['開始日時'].values[0]
-                    end_datetime = reservation['終了日時'].values[0]
+                    # ここで型変換を追加
+                    start_datetime = pd.to_datetime(reservation['開始日時'].values[0]).to_pydatetime()
+                    end_datetime = pd.to_datetime(reservation['終了日時'].values[0]).to_pydatetime()
 
                     start_date = st.date_input('開始日を選択してください', start_datetime.date())
                     start_time = st.time_input('開始時間を選択してください', start_datetime.time())
