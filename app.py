@@ -12,6 +12,7 @@ c = conn.cursor()
 c.execute('''
     CREATE TABLE IF NOT EXISTS reservations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        department TEXT,
         name TEXT NOT NULL,
         equipment TEXT NOT NULL,
         start_datetime TEXT NOT NULL,
@@ -55,6 +56,7 @@ if page == "新規予約":
     # 予約フォームの作成
     st.header('新規予約')
     with st.form('reservation_form'):
+        department = st.text_input('部署を入力してください')
         name = st.text_input('氏名を入力してください')
         equipment = st.multiselect('備品を選択してください（複数選択可）', equipment_list)
 
@@ -73,7 +75,9 @@ if page == "新規予約":
             end_datetime = datetime.combine(end_date, end_time)
 
             # 入力チェック
-            if not name:
+            if not department:
+                st.error('部署を入力してください。')
+            elif not name:
                 st.error('氏名を入力してください。')
             elif not equipment:
                 st.error('最低でも1つの備品を選択してください。')
@@ -101,9 +105,9 @@ if page == "新規予約":
                     # 予約データの挿入（各備品ごと）
                     for item in equipment:
                         c.execute('''
-                            INSERT INTO reservations (name, equipment, start_datetime, end_datetime, remarks)
-                            VALUES (?, ?, ?, ?, ?)
-                        ''', (name, item, start_datetime.isoformat(), end_datetime.isoformat(), remarks))
+                            INSERT INTO reservations (department, name, equipment, start_datetime, end_datetime, remarks)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        ''', (department, name, item, start_datetime.isoformat(), end_datetime.isoformat(), remarks))
                     conn.commit()
                     st.success('予約が完了しました！')
 
@@ -117,14 +121,14 @@ elif page == "予約一覧":
 
     if reservations:
         # データフレームに変換
-        df = pd.DataFrame(reservations, columns=['ID', '氏名', '備品', '開始日時', '終了日時', '備考'])
+        df = pd.DataFrame(reservations, columns=['ID', '部署', '氏名', '備品', '開始日時', '終了日時', '備考'])
         # 日時のフォーマットを整える
         df['開始日時'] = pd.to_datetime(df['開始日時'])
         df['終了日時'] = pd.to_datetime(df['終了日時'])
         df['開始'] = df['開始日時'].dt.strftime('%Y-%m-%d %H:%M')
         df['終了'] = df['終了日時'].dt.strftime('%Y-%m-%d %H:%M')
         # 予約の表示
-        st.dataframe(df[['ID', '氏名', '備品', '開始', '終了', '備考']])
+        st.dataframe(df[['ID', '部署', '氏名', '備品', '開始', '終了', '備考']])
 
         # 予約の選択
         st.subheader('編集またはキャンセルしたい予約のIDを入力してください')
@@ -136,6 +140,7 @@ elif page == "予約一覧":
             reservation = df[df['ID'] == selected_id]
             if not reservation.empty:
                 with st.form('edit_form'):
+                    department = st.text_input('部署を入力してください', reservation['部署'].values[0])
                     name = st.text_input('氏名を入力してください', reservation['氏名'].values[0])
                     equipment = st.multiselect('備品を選択してください（複数選択可）', equipment_list, [reservation['備品'].values[0]])
 
@@ -157,7 +162,9 @@ elif page == "予約一覧":
                         new_end_datetime = datetime.combine(end_date, end_time)
 
                         # 入力チェック
-                        if not name:
+                        if not department:
+                            st.error('部署を入力してください。')
+                        elif not name:
                             st.error('氏名を入力してください。')
                         elif not equipment:
                             st.error('最低でも1つの備品を選択してください。')
@@ -186,9 +193,9 @@ elif page == "予約一覧":
                                 # 予約の更新
                                 c.execute('''
                                     UPDATE reservations
-                                    SET name = ?, equipment = ?, start_datetime = ?, end_datetime = ?, remarks = ?
+                                    SET department = ?, name = ?, equipment = ?, start_datetime = ?, end_datetime = ?, remarks = ?
                                     WHERE id = ?
-                                ''', (name, ', '.join(equipment), new_start_datetime.isoformat(), new_end_datetime.isoformat(), remarks, selected_id))
+                                ''', (department, name, ', '.join(equipment), new_start_datetime.isoformat(), new_end_datetime.isoformat(), remarks, selected_id))
                                 conn.commit()
                                 st.success('予約が更新されました！')
             else:
@@ -199,7 +206,7 @@ elif page == "予約一覧":
             reservation = df[df['ID'] == selected_id]
             if not reservation.empty:
                 st.write('以下の予約をキャンセルしますか？')
-                st.table(reservation[['ID', '氏名', '備品', '開始', '終了', '備考']])
+                st.table(reservation[['ID', '部署', '氏名', '備品', '開始', '終了', '備考']])
                 confirm = st.button('キャンセルする')
 
                 if confirm:
@@ -223,32 +230,44 @@ elif page == "予約カレンダー":
 
     if reservations:
         # データフレームに変換
-        df = pd.DataFrame(reservations, columns=['ID', '氏名', '備品', '開始日時', '終了日時', '備考'])
+        df = pd.DataFrame(reservations, columns=['ID', '部署', '氏名', '備品', '開始日時', '終了日時', '備考'])
         # 日時のフォーマットを調整
         df['開始日時'] = pd.to_datetime(df['開始日時'])
         df['終了日時'] = pd.to_datetime(df['終了日時'])
 
-        # ガントチャートでカレンダー表示を作成
-        fig = px.timeline(
-            df,
-            x_start="開始日時",
-            x_end="終了日時",
-            y="備品",
-            color="氏名",
-            hover_data=['備考'],
-            title="予約カレンダー"
-        )
-        fig.update_yaxes(autorange="reversed")  # Y軸を反転（上から下に時系列順）
+        # 当日の予約のみを表示
+        today = pd.Timestamp(date.today())
+        df = df[(df['開始日時'] >= today) & (df['開始日時'] < today + timedelta(days=1))]
 
-        # 表示期間を指定（現在から1ヶ月先まで）
-        fig.update_xaxes(
-            range=[
-                pd.Timestamp(date.today()),
-                pd.Timestamp(date.today() + timedelta(days=30))
-            ]
-        )
+        if df.empty:
+            st.write('本日の予約はありません。')
+        else:
+            # 各予約にユニークな色を割り当てる
+            df['予約番号'] = df['ID'].astype(str)
 
-        # グラフを表示
-        st.plotly_chart(fig, use_container_width=True)
+            # ガントチャートでカレンダー表示を作成
+            fig = px.timeline(
+                df,
+                x_start="開始日時",
+                x_end="終了日時",
+                y="備品",
+                color="予約番号",
+                hover_data=['部署', '氏名', '備考'],
+                title="予約カレンダー（本日）",
+                color_discrete_sequence=px.colors.qualitative.Plotly
+            )
+            fig.update_yaxes(autorange="reversed")  # Y軸を反転（上から下に時系列順）
+
+            # 表示期間を当日のみに設定
+            fig.update_xaxes(
+                range=[
+                    today,
+                    today + timedelta(days=1)
+                ],
+                tickformat="%H:%M"
+            )
+
+            # グラフを表示
+            st.plotly_chart(fig, use_container_width=True)
     else:
         st.write('現在、予約はありません。')
